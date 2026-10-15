@@ -1,7 +1,7 @@
 # RFP: Sistema de blindaje cambiario y precio dinámico
 
 **Cliente:** ImportaTech Mexico  
-**Contacto:** Dirección de Logística y Finanzas  
+**Contacto:** finance@importech.com  
 **Equipo redactor:** Comité de Transformación Digital y Control de Inventarios  
 **Fecha de publicación:** 05/10/2026
 
@@ -9,7 +9,7 @@
 
 ## Quiénes somos
 
-Somos una empresa de comercio electrónico en Ciudad de México dedicada a la distribución minorista de refacciones, tecnología y equipo industrial ligero (sistemas de soldadura e inversores, compresores y herramientas neumáticas, generadores portátiles, maquinaria de banco y equipos para manejo de carga menor). Adquirimos el 100% de nuestro catálogo a fabricantes y mayoristas internacionales cotizados en dólares estadounidenses (USD) y vendemos a través de nuestros canales digitales cobrando en pesos mexicanos (MXN). Contamos con un equipo de 45 personas distribuidas entre compras internacionales, almacén central, atención al cliente y soporte técnico de la plataforma.
+Somos una empresa de comercio electrónico en Venustiano Carranza, Ciudad de México dedicada a la distribución minorista de refacciones, tecnología y equipo industrial ligero (sistemas de soldadura e inversores, compresores y herramientas neumáticas, generadores portátiles, maquinaria de banco y equipos para manejo de carga menor). Adquirimos el 100% de nuestro catálogo a fabricantes y mayoristas internacionales cotizados en dólares estadounidenses (USD) y vendemos a través de nuestros canales digitales cobrando en pesos mexicanos (MXN). Contamos con un equipo de 45 personas distribuidas entre compras internacionales, almacén central, atención al cliente y soporte técnico de la plataforma.
 
 ## El problema
 
