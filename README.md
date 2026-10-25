@@ -13,26 +13,26 @@ Pipeline de ingeniería de datos para ImportaTech Mexico que automatiza la captu
 
 ```mermaid
 flowchart LR
-    EB\[Amazon EventBridge] --> LI\[AWS Lambda: ingesta]
-    B\[API SIE Banxico] --> LI
-    LI -->|payload original versionado| RAW\[(Amazon S3: raw)]
-    LI --> V\[AWS Lambda: validación y cálculo]
-    CAT\[Export periódico de catálogo SQL Server] --> S3CAT\[(Amazon S3: catálogo)]
+    EB\\\\\\\[Amazon EventBridge] --> LI\\\\\\\[AWS Lambda: ingesta]
+    B\\\\\\\[API SIE Banxico] --> LI
+    LI -->|payload original versionado| RAW\\\\\\\[(Amazon S3: raw)]
+    LI --> V\\\\\\\[AWS Lambda: validación y cálculo]
+    CAT\\\\\\\[Export periódico de catálogo SQL Server] --> S3CAT\\\\\\\[(Amazon S3: catálogo)]
     S3CAT --> V
     RAW --> V
-    V -->|histórico limpio Parquet| CUR\[(Amazon S3: curated)]
-    V -->|estado vigente JSON| STATE\[(Amazon S3: current)]
-    V -->|anomalía| SNS\[Amazon SNS]
-    API\[Amazon API Gateway] --> Q\[AWS Lambda: consulta]
+    V -->|histórico limpio Parquet| CUR\\\\\\\[(Amazon S3: curated)]
+    V -->|estado vigente JSON| STATE\\\\\\\[(Amazon S3: current)]
+    V -->|anomalía| SNS\\\\\\\[Amazon SNS]
+    API\\\\\\\[Amazon API Gateway] --> Q\\\\\\\[AWS Lambda: consulta]
     Q --> STATE
-    Q --> ECOM\[E-commerce]
-    CW\[Amazon CloudWatch: logs, métricas y alarmas] -.-> LI
+    Q --> ECOM\\\\\\\[E-commerce]
+    CW\\\\\\\[Amazon CloudWatch: logs, métricas y alarmas] -.-> LI
     CW -.-> V
     CW -.-> Q
-    IAM\[AWS IAM: mínimo privilegio] -.-> LI
+    IAM\\\\\\\[AWS IAM: mínimo privilegio] -.-> LI
     IAM -.-> V
     IAM -.-> Q
-    CT\[CloudTrail: auditoría de actividad AWS] -.-> S3RAW
+    CT\\\\\\\[CloudTrail: auditoría de actividad AWS] -.-> S3RAW
 ```
 
 > El diagrama es conceptual. El despliegue debe validar cuotas, precios y elegibilidad de la cuenta AWS. No se asume que todos los servicios mantengan costo cero en cualquier cuenta o volumen.
@@ -45,15 +45,13 @@ flowchart LR
 └── docs/
     └── sonsultora/
         └── rfp.md
-
-&#x09;└── sow.md
+        └── sow.md
 ```
 
 ## Documentos
 
 * [RFP](rfp.md): necesidades, restricciones y criterios del cliente.
 * [SOW](sow.md): alcance, entregables, cronograma, equipo, riesgos y propuesta económica.
-* [Diagrama de arquitectura](docs/arquitectura/arquitectura.mmd): flujo de datos, seguridad y auditoría.
 
 ## Tecnologías propuestas
 
