@@ -42,16 +42,32 @@ flowchart LR
 ```text
 .
 ├── README.md
-└── docs/
-    └── sonsultora/
-        └── rfp.md
-        └── sow.md
+├── .gitignore
+├── docs/
+│   ├── adr/                         # decisiones de arquitectura
+│   └── consultoria/
+│       ├── rfp.md
+│       ├── sow.md
+│       ├── architecture.diagramon.json
+│       └── diferentes vistas de la arquitectura/   # diagramas y catálogo sintético
+├── infra/
+│   ├── Buckets.yaml                 # CloudFormation: buckets S3 (bronze, silver, gold, catalog, artifacts)
+│   └── Lambdas.yaml                 # CloudFormation: Lambdas, scheduler, SNS y alarmas
+├── src/
+│   ├── ingesta/handler.py
+│   ├── validacion/handler.py
+│   ├── catalogo/handler.py
+│   └── consulta/handler.py
+└── scripts/
+    └── build.sh                     # genera dist/<lambda>.zip (dist/ no se versiona)
 ```
 
 ## Documentos
 
-* [RFP](rfp.md): necesidades, restricciones y criterios del cliente.
-* [SOW](sow.md): alcance, entregables, cronograma, equipo, riesgos y propuesta económica.
+* [RFP](docs/consultoria/rfp.md): necesidades, restricciones y criterios del cliente.
+* [SOW](docs/consultoria/sow.md): alcance, entregables, cronograma, equipo, riesgos y propuesta económica.
+* [ADR 0001](docs/adr/0001-arquitectura-serverless-medallon.md): arquitectura serverless con data lake en S3.
+* [ADR 0002](docs/adr/0002-lambda-vs-glue.md): Lambda frente a Glue para bronze → silver.
 
 ## Tecnologías propuestas
 
@@ -76,10 +92,10 @@ flowchart LR
 
 ## Cómo ejecutar el trabajo
 
-1. Revisar `rfp.md` y acordar las aclaraciones pendientes.
-2. Aprobar los supuestos y criterios de aceptación de `sow.md`.
+1. Revisar `docs/consultoria/rfp.md` y acordar las aclaraciones pendientes.
+2. Aprobar los supuestos y criterios de aceptación de `docs/consultoria/sow.md`.
 3. Configurar el token de Banxico en Parameter Store y los permisos IAM mínimos.
-4. Desplegar infraestructura con CloudFormation.
+4. Desplegar `infra/Buckets.yaml`, ejecutar `./scripts/build.sh`, subir los zips de `dist/` a `lambdas/` del bucket artifacts y desplegar `infra/Lambdas.yaml`.
 5. Ejecutar pruebas de ingesta, calidad, alertas, seguridad y latencia.
 6. Hacer el traspaso al equipo de ImportaTech con manuales y ejemplos de respuesta de la API.
 
