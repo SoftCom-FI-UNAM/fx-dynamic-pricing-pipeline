@@ -1,0 +1,467 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  FX Dynamic Pricing - Plantilla 2 de 2 (version para consola): funciones Lambda, programación,
+  disparadores, alertas y alarmas. Importa los buckets de la plantilla de
+  almacenamiento (01-storage.yaml), que debe desplegarse primero. Antes de crear esta pila,
+  subir ingesta.zip, validacion.zip, catalogo.zip y consulta.zip a la carpeta lambdas/ del bucket artifacts.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: fx-pricing
+    AllowedPattern: "^[a-z0-9-]{3,20}$"
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  StorageStackName:
+    Type: String
+    Default: fx-pricing-dev-storage
+    Description: Nombre del stack desplegado con 01-storage.yaml.
+  TokenParameterName:
+    Type: String
+    Default: /fx-pricing/banxico/token
+    AllowedPattern: "^/.+"
+    Description: Parámetro SecureString con el token de Banxico (se crea a mano antes).
+  SeriesIds:
+    Type: String
+    Default: SF43718,SP30578
+    Description: Series del SIE. SF43718 = FIX. Confirmar la de inflación con Finanzas.
+  ScheduleExpression:
+    Type: String
+    Default: cron(35 12-14 ? * MON-FRI *)
+    Description: 12:35, 13:35 y 14:35 hora CDMX en días hábiles (la ingesta es idempotente).
+  AnomalyWindow:
+    Type: Number
+    Default: 7
+    Description: Observaciones de la ventana móvil (propuesta, pendiente de aprobación).
+  AnomalySigma:
+    Type: Number
+    Default: 2
+    Description: Desviaciones estándar para marcar anomalía (propuesta, pendiente de aprobación).
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Correo para alertas (opcional). Hay que confirmar la suscripción.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Resources:
+  # ================================================================ Alertas
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-alertas"
+
+  AlertsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ================================================================ 1. Ingesta
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-ingesta"
+      RetentionInDays: 30
+
+  IngestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ingesta
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${IngestLogGroup.Arn}:*"
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TokenParameterName}"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub
+                  - "${Arn}/*"
+                  - Arn: { "Fn::ImportValue": !Sub "${StorageStackName}-BronzeBucketArn" }
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: { "Fn::ImportValue": !Sub "${StorageStackName}-BronzeBucketArn" }
+
+  IngestFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-ingesta"
+      Description: Descarga FIX e inflación del SIE de Banxico y guarda el JSON original en bronze.
+      Runtime: python3.13
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: { "Fn::ImportValue": !Sub "${StorageStackName}-ArtifactsBucketName" }
+        S3Key: lambdas/ingesta.zip
+      Role: !GetAtt IngestRole.Arn
+      MemorySize: 256
+      Timeout: 180
+      LoggingConfig: { LogGroup: !Ref IngestLogGroup }
+      Environment:
+        Variables:
+          BRONZE_BUCKET: { "Fn::ImportValue": !Sub "${StorageStackName}-BronzeBucketName" }
+          BRONZE_PREFIX: banxico_sie
+          TOKEN_PARAMETER_NAME: !Ref TokenParameterName
+          SERIES: !Ref SeriesIds
+
+  IngestAsyncConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref IngestFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 2
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition: { StringEquals: { aws:SourceAccount: !Ref AWS::AccountId } }
+      Policies:
+        - PolicyName: invocar-ingesta
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt IngestFunction.Arn
+
+  DailySchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-ingesta-diaria"
+      ScheduleExpression: !Ref ScheduleExpression
+      ScheduleExpressionTimezone: America/Mexico_City
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: !GetAtt IngestFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"mode": "daily"}'
+        RetryPolicy: { MaximumRetryAttempts: 3, MaximumEventAgeInSeconds: 3600 }
+
+  # ================================================================ 2. Validación y cálculo
+  ValidateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-validacion-calculo"
+      RetentionInDays: 30
+
+  ValidateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: validacion-calculo
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${ValidateLogGroup.Arn}:*"
+              - Sid: LeerBronze
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub
+                  - "${Arn}/*"
+                  - Arn: { "Fn::ImportValue": !Sub "${StorageStackName}-BronzeBucketArn" }
+              - Sid: EscribirSilverYGold
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource:
+                  - !Sub
+                    - "${Arn}/*"
+                    - Arn: { "Fn::ImportValue": !Sub "${StorageStackName}-SilverBucketArn" }
+                  - !Sub
+                    - "${Arn}/*"
+                    - Arn: { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketArn" }
+              - Sid: ListarBuckets
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  - { "Fn::ImportValue": !Sub "${StorageStackName}-BronzeBucketArn" }
+                  - { "Fn::ImportValue": !Sub "${StorageStackName}-SilverBucketArn" }
+              - Sid: Alertas
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref AlertsTopic
+              - Sid: DispararEvaluacionCatalogo
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt CatalogEvalFunction.Arn
+
+  ValidateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-validacion-calculo"
+      Description: Valida calidad, calcula variación/volatilidad, escribe silver y gold, alerta anomalías.
+      Runtime: python3.13
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: { "Fn::ImportValue": !Sub "${StorageStackName}-ArtifactsBucketName" }
+        S3Key: lambdas/validacion.zip
+      Role: !GetAtt ValidateRole.Arn
+      MemorySize: 512
+      Timeout: 120
+      LoggingConfig: { LogGroup: !Ref ValidateLogGroup }
+      Environment:
+        Variables:
+          BRONZE_BUCKET: { "Fn::ImportValue": !Sub "${StorageStackName}-BronzeBucketName" }
+          SILVER_BUCKET: { "Fn::ImportValue": !Sub "${StorageStackName}-SilverBucketName" }
+          GOLD_BUCKET: { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketName" }
+          STATE_KEY: risk/current.json
+          ALERTS_TOPIC_ARN: !Ref AlertsTopic
+          CATALOG_EVAL_FUNCTION: !Ref CatalogEvalFunction
+          ANOMALY_WINDOW: !Ref AnomalyWindow
+          ANOMALY_SIGMA: !Ref AnomalySigma
+          RULE_VERSION: pending-client-approval
+
+  # Cada objeto nuevo en bronze (excepto cuarentena) dispara la validación.
+  BronzeObjectCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-bronze-nuevo-objeto"
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        detail:
+          bucket:
+            name: [{ "Fn::ImportValue": !Sub "${StorageStackName}-BronzeBucketName" }]
+          object:
+            key: [{ prefix: "banxico_sie/serie=" }, { prefix: "banxico_sie/backfill/" }]
+      Targets:
+        - Id: validacion
+          Arn: !GetAtt ValidateFunction.Arn
+
+  ValidateInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ValidateFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt BronzeObjectCreatedRule.Arn
+
+  # ================================================================ 3. Evaluación de catálogo
+  CatalogEvalLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-evaluacion-catalogo"
+      RetentionInDays: 30
+
+  CatalogEvalRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: evaluacion-catalogo
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${CatalogEvalLogGroup.Arn}:*"
+              - Sid: LeerCatalogo
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub
+                  - "${Arn}/*"
+                  - Arn: { "Fn::ImportValue": !Sub "${StorageStackName}-CatalogBucketArn" }
+              - Sid: ListarCatalogo
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: { "Fn::ImportValue": !Sub "${StorageStackName}-CatalogBucketArn" }
+              - Sid: LeerYActualizarEstado
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub
+                  - "${Arn}/*"
+                  - Arn: { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketArn" }
+              - Sid: Alertas
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref AlertsTopic
+
+  CatalogEvalFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-evaluacion-catalogo"
+      Description: Cruza FIX con el catálogo (costo USD, precio MXN, margen) y decide ajuste o pausa de promociones.
+      Runtime: python3.13
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: { "Fn::ImportValue": !Sub "${StorageStackName}-ArtifactsBucketName" }
+        S3Key: lambdas/catalogo.zip
+      Role: !GetAtt CatalogEvalRole.Arn
+      MemorySize: 512
+      Timeout: 120
+      LoggingConfig: { LogGroup: !Ref CatalogEvalLogGroup }
+      Environment:
+        Variables:
+          CATALOG_BUCKET: { "Fn::ImportValue": !Sub "${StorageStackName}-CatalogBucketName" }
+          CATALOG_PREFIX: exports/
+          GOLD_BUCKET: { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketName" }
+          STATE_KEY: risk/current.json
+          ALERTS_TOPIC_ARN: !Ref AlertsTopic
+
+  # Una exportación nueva del catálogo también dispara la evaluación.
+  CatalogObjectCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-catalogo-nuevo"
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        detail:
+          bucket:
+            name: [{ "Fn::ImportValue": !Sub "${StorageStackName}-CatalogBucketName" }]
+          object:
+            key: [{ prefix: "exports/" }]
+      Targets:
+        - Id: evaluacion-catalogo
+          Arn: !GetAtt CatalogEvalFunction.Arn
+
+  CatalogEvalInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CatalogEvalFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CatalogObjectCreatedRule.Arn
+
+  # ================================================================ 4. Consulta (para la API)
+  QueryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-consulta-riesgo"
+      RetentionInDays: 30
+
+  QueryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: consulta-riesgo
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${QueryLogGroup.Arn}:*"
+              - Sid: SoloLeerEstadoVigente
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub
+                  - "${Arn}/risk/*"
+                  - Arn: { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketArn" }
+
+  QueryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-consulta-riesgo"
+      Description: Devuelve el estado de riesgo vigente (GET /v1/risk/current y /v1/health).
+      Runtime: python3.13
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: { "Fn::ImportValue": !Sub "${StorageStackName}-ArtifactsBucketName" }
+        S3Key: lambdas/consulta.zip
+      Role: !GetAtt QueryRole.Arn
+      MemorySize: 256
+      Timeout: 5
+      LoggingConfig: { LogGroup: !Ref QueryLogGroup }
+      Environment:
+        Variables:
+          GOLD_BUCKET: { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketName" }
+          STATE_KEY: risk/current.json
+
+  # ================================================================ Alarmas
+  IngestErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-ingesta-errores"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref IngestFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+
+  ValidateErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-validacion-errores"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref ValidateFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+
+  CatalogEvalErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-catalogo-errores"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref CatalogEvalFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertsTopic]
+
+Outputs:
+  IngestFunctionName:
+    Value: !Ref IngestFunction
+  ValidateFunctionName:
+    Value: !Ref ValidateFunction
+  CatalogEvalFunctionName:
+    Value: !Ref CatalogEvalFunction
+  QueryFunctionArn:
+    Value: !GetAtt QueryFunction.Arn
+    Export: { Name: !Sub "${AWS::StackName}-QueryFunctionArn" }
+  AlertsTopicArn:
+    Value: !Ref AlertsTopic
+    Export: { Name: !Sub "${AWS::StackName}-AlertsTopicArn" }

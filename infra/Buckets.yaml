@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  FX Dynamic Pricing - Plantilla 1 de 2: almacenamiento S3 (data lake).
+  Crea los buckets bronze, silver, gold, catalog y artifacts (arquitectura medallón). Se despliega
+  ANTES que la plantilla de Lambdas, que importa estos nombres.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: fx-pricing
+    AllowedPattern: "^[a-z0-9-]{3,20}$"
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  BronzeNoncurrentDays:
+    Type: Number
+    Default: 365
+    Description: Días que se conservan versiones anteriores en bronze.
+  GoldNoncurrentDays:
+    Type: Number
+    Default: 30
+    Description: Días que se conservan versiones anteriores del estado vigente.
+
+Resources:
+  # ---------------------------------------------------------------- bronze (antes raw)
+  # Respuestas originales de Banxico, tal cual llegan. Versionado obligatorio.
+  BronzeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-bronze-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: { Status: Enabled }
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true   # la Lambda de validación se dispara con cada objeto nuevo
+      LifecycleConfiguration:
+        Rules:
+          - Id: versiones-anteriores
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: !Ref BronzeNoncurrentDays }
+          - Id: cargas-incompletas
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+      Tags:
+        - { Key: project, Value: !Ref ProjectName }
+        - { Key: layer, Value: bronze }
+
+  BronzeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BronzeBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoloHTTPS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt BronzeBucket.Arn, !Sub "${BronzeBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  # ---------------------------------------------------------------- silver (antes curated)
+  # Histórico limpio en Parquet, generado por la Lambda de validación.
+  SilverBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-silver-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: { Status: Enabled }
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      LifecycleConfiguration:
+        Rules:
+          - Id: versiones-anteriores
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 90 }
+      Tags:
+        - { Key: project, Value: !Ref ProjectName }
+        - { Key: layer, Value: silver }
+
+  SilverBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SilverBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoloHTTPS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt SilverBucket.Arn, !Sub "${SilverBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  # ---------------------------------------------------------------- gold (antes current)
+  # Un JSON pequeño con el estado de riesgo vigente; lo lee la API.
+  GoldBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-gold-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: { Status: Enabled }
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      LifecycleConfiguration:
+        Rules:
+          - Id: versiones-anteriores
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: !Ref GoldNoncurrentDays }
+      Tags:
+        - { Key: project, Value: !Ref ProjectName }
+        - { Key: layer, Value: gold }
+
+  GoldBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref GoldBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoloHTTPS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt GoldBucket.Arn, !Sub "${GoldBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  # ---------------------------------------------------------------- catalog
+  # Aquí ImportaTech deja la exportación periódica del catálogo de SQL Server.
+  CatalogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-catalog-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: { Status: Enabled }
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true   # una exportación nueva dispara la evaluación de catálogo
+      LifecycleConfiguration:
+        Rules:
+          - Id: versiones-anteriores
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 90 }
+      Tags:
+        - { Key: project, Value: !Ref ProjectName }
+        - { Key: layer, Value: catalog }
+
+  CatalogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CatalogBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoloHTTPS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt CatalogBucket.Arn, !Sub "${CatalogBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  # ---------------------------------------------------------------- artifacts
+  # Código empaquetado de las Lambdas ("aws cloudformation package" lo sube aquí).
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-artifacts-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: { Status: Enabled }
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      LifecycleConfiguration:
+        Rules:
+          - Id: versiones-anteriores
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 }
+
+  ArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoloHTTPS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt ArtifactsBucket.Arn, !Sub "${ArtifactsBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+Outputs:
+  BronzeBucketName:
+    Value: !Ref BronzeBucket
+    Export: { Name: !Sub "${AWS::StackName}-BronzeBucketName" }
+  BronzeBucketArn:
+    Value: !GetAtt BronzeBucket.Arn
+    Export: { Name: !Sub "${AWS::StackName}-BronzeBucketArn" }
+  SilverBucketName:
+    Value: !Ref SilverBucket
+    Export: { Name: !Sub "${AWS::StackName}-SilverBucketName" }
+  SilverBucketArn:
+    Value: !GetAtt SilverBucket.Arn
+    Export: { Name: !Sub "${AWS::StackName}-SilverBucketArn" }
+  GoldBucketName:
+    Value: !Ref GoldBucket
+    Export: { Name: !Sub "${AWS::StackName}-GoldBucketName" }
+  GoldBucketArn:
+    Value: !GetAtt GoldBucket.Arn
+    Export: { Name: !Sub "${AWS::StackName}-GoldBucketArn" }
+  CatalogBucketName:
+    Value: !Ref CatalogBucket
+    Export: { Name: !Sub "${AWS::StackName}-CatalogBucketName" }
+  CatalogBucketArn:
+    Value: !GetAtt CatalogBucket.Arn
+    Export: { Name: !Sub "${AWS::StackName}-CatalogBucketArn" }
+  ArtifactsBucketName:
+    Value: !Ref ArtifactsBucket
+    Export: { Name: !Sub "${AWS::StackName}-ArtifactsBucketName" }
