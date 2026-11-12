@@ -6,63 +6,39 @@
 
 ## Contexto
 
-La transformación bronze → silver (validación, deduplicación, Parquet) y silver → gold (indicadores y estado vigente) puede implementarse con Lambda o con Glue. Los créditos de AWS alcanzarían para Glue, así que el costo cero no es el argumento: la decisión debe sostenerse con volumen, tiempo y costo.
-
-## Volumen real por corrida
-
-Fuentes: el código de `src/ingesta`, `infra/Lambdas.yaml` y el catálogo sintético del repositorio. **Las cifras marcadas como estimación son cálculos propios y deben medirse en la primera corrida real.**
-
-| Dato | Volumen por corrida | Base |
-|---|---|---|
-| Ingesta diaria (FIX + inflación) | 1 a 2 observaciones por serie, menos de 5 KB de JSON | Estimación: el SIE devuelve el dato del día |
-| Backfill histórico (FIX desde 1991) | Unos 8,000 registros, menos de 2 MB | Estimación: ~250 días hábiles por año |
-| Catálogo | 100 SKU, 7 KB (70 bytes por fila) | Medido en `catalogo_sqlserver_sintetico.csv` |
-| Catálogo real hipotético (1 millón de SKU) | Unos 70 MB | Extrapolación de los 70 bytes por fila |
-| Corridas al mes | Unas 130 (2 series × 3 intentos diarios × ~22 días hábiles) | `ScheduleExpression` en `Lambdas.yaml` |
-
-## Tiempo de ejecución y límites
-
-| Concepto | Lambda | Glue (Spark) | Glue (Python shell) |
-|---|---|---|---|
-| Arranque | Menos de 1 s en frío (estimación) | 10 s a más de 30 s (estimación) | Alrededor de 10 s (estimación) |
-| Tiempo por corrida esperado | 1 a 5 s (estimación) | Dominado por el arranque | Unos 10 a 20 s |
-| Límite de ejecución | **15 minutos** | Horas | Horas |
-| Memoria | Hasta 10,240 MB (hoy 512 MB configurados) | Mínimo 2 DPU, 16 GB | 1 DPU o 0.0625 DPU |
-| Facturación mínima | 1 ms | 1 minuto | 1 minuto |
-
-El requisito de alertar en menos de 5 minutos desde la publicación (N2 del SOW) deja poco margen para un arranque de Spark, sobre todo si se encadenan dos etapas.
-
-## Costo comparado
-
-Cálculo con precios de lista de us-east-1 (Lambda: USD 0.0000166667 por GB-s; Glue: USD 0.44 por DPU-hora). **Hay que validar precios y elegibilidad de la cuenta antes de usarlos como compromiso.**
-
-| Opción | Cálculo | Costo mensual |
-|---|---|---|
-| Lambda, 512 MB, 5 s | 130 × 0.5 GB × 5 s = 325 GB-s | Menos de USD 0.01 (dentro de la capa gratuita) |
-| Glue Python shell, 0.0625 DPU, mínimo 1 min | 130 × 0.0625 DPU × 1/60 h × 0.44 | Alrededor de USD 0.06 |
-| Glue Spark, 2 DPU, mínimo 1 min | 130 × 2 DPU × 1/60 h × 0.44 | Alrededor de USD 1.90 |
-
-La diferencia absoluta es mínima en las tres opciones. El costo no decide; deciden el arranque, la simplicidad operativa y la capacidad de crecimiento.
+La transformación de bronze a silver (validación, deduplicación, Parquet) y de silver a gold (indicadores y estado vigente) puede implementarse con Lambda o con Glue. Los créditos de AWS alcanzarían para Glue, así que el costo cero no es el argumento. La decisión se basa en el tamaño del problema y en la complejidad que cada opción añade.
 
 ## Decisión
 
-Usar **Lambda** para bronze → silver y silver → gold mientras se cumplan los umbrales de abajo. Cada capa debe ser su propia función, disparada por el objeto nuevo de la capa anterior, con prefijos distintos para evitar que una función se dispare a sí misma.
+Usar **AWS Lambda** para las transformaciones de bronze → silver y silver → gold. Cada capa es su propia función, disparada por el objeto nuevo de la capa anterior, con prefijos distintos para que ninguna función se dispare a sí misma.
+
+## Justificación
+
+* **El volumen es muy pequeño.** El pipeline procesa una o dos observaciones diarias por serie (tipo de cambio e inflación) y un catálogo de productos de tamaño modesto. Es una carga que una función pequeña resuelve en segundos; un motor distribuido como Spark estaría muy sobredimensionado.
+* **El costo es mínimo.** Lambda cobra solo por el tiempo de ejecución, que aquí es muy corto, y queda prácticamente dentro de la capa gratuita. Glue cobra por capacidad reservada con un tiempo mínimo de facturación por corrida, así que es más caro para una tarea tan pequeña, aunque la diferencia absoluta sea baja.
+* **Arranque rápido.** El SOW exige alertar anomalías en menos de cinco minutos desde la publicación del dato. Lambda arranca casi de inmediato; un trabajo de Glue tarda bastante más en iniciar, lo que consume parte de ese margen, sobre todo al encadenar dos etapas.
+* **Curva de aprendizaje más corta.** Lambda con Python se escribe y se prueba como código normal. Glue exige aprender su modelo de trabajos, el catálogo de datos, los conectores y, si se usa Spark, el propio Spark. Para un equipo pequeño y un plazo de pocas semanas, esa inversión no se justifica.
+* **Menos piezas que operar.** Lambda ya es parte del diseño (ingesta, catálogo y consulta). Usarla también para las transformaciones mantiene una sola forma de empaquetar, desplegar con CloudFormation y monitorear con CloudWatch.
+* **Encaja con la arquitectura por eventos.** Un objeto nuevo en S3 dispara la función de la siguiente capa de forma natural, sin orquestación adicional.
+
+## Alternativas consideradas
+
+* **Glue con Spark:** pensado para grandes volúmenes y transformaciones distribuidas. No hay ese problema aquí.
+* **Glue con Python shell:** más ligero que Spark, pero sigue añadiendo arranque más lento, otro servicio que aprender y desplegar, y poca ventaja sobre Lambda para esta carga.
 
 ## Cuándo cambiaríamos a Glue
 
-Se reevalúa si ocurre **cualquiera** de estas condiciones, medida en producción:
+Se reevaluaría la decisión si:
 
-1. Una corrida procesa **más de 1 GB** de datos, o la memoria usada supera el **70%** de la configurada y ya no conviene subirla.
-2. El tiempo p95 de una función supera **10 minutos**, es decir, dos tercios del límite de 15.
-3. El catálogo real supera aproximadamente **5 millones de filas** (unos 350 MB) o requiere uniones contra históricos grandes.
-4. Aparecen transformaciones que justifican Spark (particionado de varios años de datos, reprocesos masivos, uniones pesadas) o un catálogo de fuentes y esquemas que Glue Data Catalog gestione mejor.
-5. El volumen crece unas 100 veces frente al actual y se confirma que se sostiene.
+* El volumen por corrida crece hasta acercarse a los límites de memoria o de tiempo de ejecución de Lambda, o la función empieza a tardar lo suficiente para poner en riesgo el límite de ejecución.
+* El catálogo real resulta mucho mayor de lo supuesto o requiere uniones pesadas contra históricos grandes.
+* Aparecen transformaciones que sí justifican Spark, como reprocesos masivos de varios años de datos.
+* El equipo adopta Glue para otras cargas y conviene unificar herramientas.
 
-El reproceso histórico completo (backfill) también queda dentro de Lambda: unos 2 MB caben holgadamente. Si se reprocesara el catálogo completo de varios años, aplica la condición 3.
+Estos criterios se revisarán con las métricas reales de CloudWatch (duración, memoria y tamaño de los objetos) una vez que el pipeline esté en operación.
 
 ## Consecuencias
 
-* Menor latencia y menor complejidad operativa; encaja con el objetivo de alerta en menos de 5 minutos.
-* **Parquet en Lambda requiere una biblioteca.** El README propone "Python y biblioteca estándar", pero la biblioteca estándar no escribe Parquet. Habrá que añadir una capa (por ejemplo, AWS SDK for pandas / pyarrow) o aceptar otro formato para silver. Esto debe resolverse antes de implementar la Lambda de silver.
-* Si se cruza algún umbral, la migración se limita a la capa afectada, porque cada una se dispara por archivos en S3 y no por llamadas directas.
-* Las cifras de esta decisión son estimaciones hasta tener métricas de CloudWatch (duración, memoria, tamaño de los objetos). Conviene revisar este ADR tras el primer mes de operación.
+* Menor latencia, menor costo y menor complejidad operativa.
+* Hay un techo de escala: si el volumen crece mucho, será necesario migrar la capa afectada. Como cada capa se dispara por archivos en S3 y no por llamadas directas, esa migración quedaría acotada.
+* **Parquet en Lambda requiere una biblioteca.** El README propone "Python y biblioteca estándar", pero la biblioteca estándar no escribe Parquet. Habrá que añadir una capa de Lambda (por ejemplo, AWS SDK for pandas o pyarrow) o elegir otro formato para silver. Debe resolverse antes de implementar la función de silver.
