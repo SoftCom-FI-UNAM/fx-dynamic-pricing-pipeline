@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   FX Dynamic Pricing - Plantilla 2 de 2 (version para consola): funciones Lambda, programación,
   disparadores, alertas y alarmas. Importa los buckets de la plantilla de
-  almacenamiento (01-storage.yaml), que debe desplegarse primero. Antes de crear esta pila,
+  almacenamiento (Buckets.yaml), que debe desplegarse primero. Antes de crear esta pila,
   subir ingesta.zip, validacion.zip, catalogo.zip y consulta.zip a la carpeta lambdas/ del bucket artifacts.
 
 Parameters:
@@ -17,7 +17,7 @@ Parameters:
   StorageStackName:
     Type: String
     Default: fx-pricing-dev-storage
-    Description: Nombre del stack desplegado con 01-storage.yaml.
+    Description: Nombre del stack desplegado con Buckets.yaml.
   TokenParameterName:
     Type: String
     Default: /fx-pricing/banxico/token

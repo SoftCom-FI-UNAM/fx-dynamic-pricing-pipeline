@@ -92,25 +92,25 @@ No se incluye una VPC dedicada para las Lambdas que solo consumen la API públic
 
 ```mermaid
 flowchart TD
-    A\\\\\\\\\\\\\\\[Banxico SIE: FIX e inflación] --> B\\\\\\\\\\\\\\\[EventBridge: programación diaria]
-    B --> C\\\\\\\\\\\\\\\[Lambda de ingesta]
-    C --> D\\\\\\\\\\\\\\\[S3 raw: respuestas originales versionadas]
-    D --> E\\\\\\\\\\\\\\\[Lambda de validación y cálculo]
-    E --> F\\\\\\\\\\\\\\\[S3 curated: histórico Parquet]
-    E --> G\\\\\\\\\\\\\\\[S3 current: estado vigente JSON]
-    G --> H\\\\\\\\\\\\\\\[Lambda de consulta]
-    H --> I\\\\\\\\\\\\\\\[API Gateway REST]
-    I --> J\\\\\\\\\\\\\\\[E-commerce: consulta de riesgo]
-    E --> K\\\\\\\\\\\\\\\[SNS: alertas]
-    C -. logs y métricas .-> L\\\\\\\\\\\\\\\[CloudWatch]
+    A[Banxico SIE: FIX e inflación] --> B[EventBridge: programación diaria]
+    B --> C[Lambda de ingesta]
+    C --> D[S3 raw: respuestas originales versionadas]
+    D --> E[Lambda de validación y cálculo]
+    E --> F[S3 curated: histórico Parquet]
+    E --> G[S3 current: estado vigente JSON]
+    G --> H[Lambda de consulta]
+    H --> I[API Gateway REST]
+    I --> J[E-commerce: consulta de riesgo]
+    E --> K[SNS: alertas]
+    C -. logs y métricas .-> L[CloudWatch]
     E -. logs y métricas .-> L
     H -. logs y métricas .-> L
-    M\\\\\\\\\\\\\\\[SSM Parameter Store: token Banxico] --> C
-    N\\\\\\\\\\\\\\\[IAM: mínimo privilegio] -. permisos .-> C
+    M[SSM Parameter Store: token Banxico] --> C
+    N[IAM: mínimo privilegio] -. permisos .-> C
     N -. permisos .-> E
     N -. permisos .-> H
-    O\\\\\\\\\\\\\\\[CloudTrail: auditoría] -. eventos de cuenta .-> P\\\\\\\\\\\\\\\[Gobierno y operación]
-    Q\\\\\\\\\\\\\\\[CloudFormation: infraestructura como código] -. despliega .-> B
+    O[CloudTrail: auditoría] -. eventos de cuenta .-> P[Gobierno y operación]
+    Q[CloudFormation: infraestructura como código] -. despliega .-> B
     Q -. despliega .-> C
     Q -. despliega .-> D
     Q -. despliega .-> I
@@ -157,15 +157,15 @@ Ejemplo de respuesta:
 
 ```json
 {
-  "indicator\\\\\\\\\\\\\\\_date": "2026-10-20",
-  "ingested\\\\\\\\\\\\\\\_at": "2026-10-20T18:35:00Z",
-  "fx\\\\\\\\\\\\\\\_fix\\\\\\\\\\\\\\\_mxn\\\\\\\\\\\\\\\_per\\\\\\\\\\\\\\\_usd": 18.25,
-  "inflation\\\\\\\\\\\\\\\_value": null,
-  "risk\\\\\\\\\\\\\\\_status": "NORMAL",
+  "indicator_date": "2026-10-20",
+  "ingested_at": "2026-10-20T18:35:00Z",
+  "fx_fix_mxn_per_usd": 18.25,
+  "inflation_value": null,
+  "risk_status": "NORMAL",
   "anomaly": false,
-  "catalog\\\\\\\\\\\\\\\_evaluation": "PENDING\\\\\\\\\\\\\\\_CATALOG\\\\\\\\\\\\\\\_EXPORT",
-  "promotion\\\\\\\\\\\\\\\_action": "NO\\\\\\\\\\\\\\\_CHANGE",
-  "rule\\\\\\\\\\\\\\\_version": "pending-client-approval"
+  "catalog_evaluation": "PENDING_CATALOG_EXPORT",
+  "promotion_action": "NO_CHANGE",
+  "rule_version": "pending-client-approval"
 }
 ```
 

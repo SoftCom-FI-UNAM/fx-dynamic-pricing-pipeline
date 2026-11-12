@@ -48,5 +48,6 @@ El sistema ingiere diariamente el tipo de cambio FIX y la inflación del SIE de 
 ## Pendientes
 
 * `Lambdas.yaml` define la Lambda de consulta pero no incluye el recurso de Amazon API Gateway que la expone; debe añadirse o desplegarse aparte.
-* Las plantillas hacen referencia a `01-storage.yaml`; el nombre del archivo en el repositorio es `Buckets.yaml`. Alinear nombres o la descripción.
-* README y diagrama mencionan "raw/curated/current"; las plantillas usan bronze/silver/gold. Unificar la terminología.
+* El README y los diagramas del SOW deben usar la terminología bronze/silver/gold de las plantillas (el README ya está alineado).
+
+Decisiones relacionadas: [ADR 0002](0002-lambda-vs-glue.md), [ADR 0003](0003-cloudformation-como-iac.md) y [ADR 0004](0004-sin-athena-en-la-api.md).

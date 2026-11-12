@@ -68,6 +68,17 @@ flowchart LR
 * [SOW](docs/consultoria/sow.md): alcance, entregables, cronograma, equipo, riesgos y propuesta económica.
 * [ADR 0001](docs/adr/0001-arquitectura-serverless-medallon.md): arquitectura serverless con data lake en S3.
 * [ADR 0002](docs/adr/0002-lambda-vs-glue.md): Lambda frente a Glue para bronze → silver.
+* [ADR 0003](docs/adr/0003-cloudformation-como-iac.md): CloudFormation como única herramienta de IaC.
+* [ADR 0004](docs/adr/0004-sin-athena-en-la-api.md): la API lee el estado vigente, no consulta Athena.
+
+## Catálogo de productos (datos sintéticos)
+
+El catálogo real vive en Microsoft SQL Server y el proyecto no lo migra ni lo modifica. Como no tenemos acceso a esa base, **el catálogo de este repositorio es sintético**: simula el export periódico (SKU, categoría, precio y costo en USD, margen mínimo, descuento de promoción y precio recomendado en MXN).
+
+* Generador: `docs/consultoria/diferentes vistas de la arquitectura/generate_catalog.js` (Node.js, sin dependencias).
+* Reproducible: usa un generador pseudoaleatorio con semilla fija (`20261112`), así que produce siempre el mismo archivo.
+* Salida incluida: `catalogo_sqlserver_sintetico.csv` en la misma carpeta, con 100 productos (unos 7 KB).
+* Para regenerarlo: `node "docs/consultoria/diferentes vistas de la arquitectura/generate_catalog.js" <ruta-de-salida.csv>`.
 
 ## Tecnologías propuestas
 

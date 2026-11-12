@@ -1,7 +1,7 @@
 """Lambda evaluacion_catalogo — ESQUELETO. Pendiente de implementar en la siguiente etapa.
 
 Ya tiene permisos, variables de entorno y disparador configurados por
-infra/02-lambdas.yaml. Solo registra el evento recibido para comprobar
+infra/Lambdas.yaml. Solo registra el evento recibido para comprobar
 que el flujo de punta a punta funciona.
 """
 import json
