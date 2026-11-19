@@ -13,8 +13,6 @@ Pipeline de ingeniería de datos para ImportaTech Mexico que automatiza la captu
 
 ![Arquitectura del pipeline](docs/consultoria/diagrama.jpeg)
 
-> El diagrama es conceptual. El despliegue debe validar cuotas, precios y elegibilidad de la cuenta AWS. No se asume que todos los servicios mantengan costo cero en cualquier cuenta o volumen.
-
 ## Estructura del repositorio
 
 ```text
