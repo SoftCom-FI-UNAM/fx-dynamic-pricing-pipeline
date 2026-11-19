@@ -8,6 +8,7 @@ import json
 import os
 
 import boto3
+from botocore.exceptions import ClientError
 
 GOLD_BUCKET = os.environ.get("GOLD_BUCKET", "")
 STATE_KEY = os.environ.get("STATE_KEY", "risk/current.json")
@@ -29,5 +30,8 @@ def lambda_handler(event, context):
     try:
         obj = _s3.get_object(Bucket=GOLD_BUCKET, Key=STATE_KEY)
         return _response(200, json.loads(obj["Body"].read()))
-    except _s3.exceptions.NoSuchKey:
-        return _response(503, {"status": "SIN_ESTADO", "detalle": "Aún no hay un estado calculado."})
+    except ClientError as exc:
+        # Sin s3:ListBucket, S3 responde AccessDenied (no NoSuchKey) cuando el objeto aún no existe.
+        if exc.response["Error"]["Code"] in ("NoSuchKey", "AccessDenied", "404", "403"):
+            return _response(503, {"status": "SIN_ESTADO", "detalle": "Aún no hay un estado calculado."})
+        raise

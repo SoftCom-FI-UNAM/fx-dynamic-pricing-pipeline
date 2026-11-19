@@ -39,6 +39,12 @@ Parameters:
     Type: Number
     Default: 2
     Description: Desviaciones estándar para marcar anomalía (propuesta, pendiente de aprobación).
+  PandasLayerArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /aws/service/aws-sdk-pandas/3.18.0/py3.13/x86_64/layer-arn
+    Description: >
+      Parámetro público de SSM con el ARN de la capa administrada AWS SDK for pandas
+      (pandas + pyarrow) para escribir Parquet. Cambiar la versión si no existe en la región.
   AlertEmail:
     Type: String
     Default: ""
@@ -204,6 +210,7 @@ Resources:
                 Resource:
                   - { "Fn::ImportValue": !Sub "${StorageStackName}-BronzeBucketArn" }
                   - { "Fn::ImportValue": !Sub "${StorageStackName}-SilverBucketArn" }
+                  - { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketArn" }
               - Sid: Alertas
                 Effect: Allow
                 Action: sns:Publish
@@ -222,9 +229,10 @@ Resources:
       Handler: handler.lambda_handler
       Code:
         S3Bucket: { "Fn::ImportValue": !Sub "${StorageStackName}-ArtifactsBucketName" }
-        S3Key: lambdas/validacion.zip
+        S3Key: lambdas/validacion-v3.zip
       Role: !GetAtt ValidateRole.Arn
-      MemorySize: 512
+      Layers: [!Ref PandasLayerArn]
+      MemorySize: 1024
       Timeout: 120
       LoggingConfig: { LogGroup: !Ref ValidateLogGroup }
       Environment:
@@ -238,6 +246,7 @@ Resources:
           ANOMALY_WINDOW: !Ref AnomalyWindow
           ANOMALY_SIGMA: !Ref AnomalySigma
           RULE_VERSION: pending-client-approval
+          PARQUET_PREFIX: historico
 
   # Cada objeto nuevo en bronze (excepto cuarentena) dispara la validación.
   BronzeObjectCreatedRule:
@@ -294,10 +303,12 @@ Resources:
                 Resource: !Sub
                   - "${Arn}/*"
                   - Arn: { "Fn::ImportValue": !Sub "${StorageStackName}-CatalogBucketArn" }
-              - Sid: ListarCatalogo
+              - Sid: ListarCatalogoYGold
                 Effect: Allow
                 Action: s3:ListBucket
-                Resource: { "Fn::ImportValue": !Sub "${StorageStackName}-CatalogBucketArn" }
+                Resource:
+                  - { "Fn::ImportValue": !Sub "${StorageStackName}-CatalogBucketArn" }
+                  - { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketArn" }
               - Sid: LeerYActualizarEstado
                 Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
@@ -318,7 +329,7 @@ Resources:
       Handler: handler.lambda_handler
       Code:
         S3Bucket: { "Fn::ImportValue": !Sub "${StorageStackName}-ArtifactsBucketName" }
-        S3Key: lambdas/catalogo.zip
+        S3Key: lambdas/catalogo-v3.zip
       Role: !GetAtt CatalogEvalRole.Arn
       MemorySize: 512
       Timeout: 120
@@ -329,6 +340,7 @@ Resources:
           CATALOG_PREFIX: exports/
           GOLD_BUCKET: { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketName" }
           STATE_KEY: risk/current.json
+          DETAIL_KEY: catalog/evaluacion/latest.json
           ALERTS_TOPIC_ARN: !Ref AlertsTopic
 
   # Una exportación nueva del catálogo también dispara la evaluación.
@@ -396,7 +408,7 @@ Resources:
       Handler: handler.lambda_handler
       Code:
         S3Bucket: { "Fn::ImportValue": !Sub "${StorageStackName}-ArtifactsBucketName" }
-        S3Key: lambdas/consulta.zip
+        S3Key: lambdas/consulta-v2.zip
       Role: !GetAtt QueryRole.Arn
       MemorySize: 256
       Timeout: 5
@@ -405,6 +417,24 @@ Resources:
         Variables:
           GOLD_BUCKET: { "Fn::ImportValue": !Sub "${StorageStackName}-GoldBucketName" }
           STATE_KEY: risk/current.json
+
+  # API HTTP pública: todas las rutas van a la Lambda de consulta,
+  # que atiende GET /v1/risk/current y GET /v1/health.
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-api"
+      Description: API de consulta del estado de riesgo cambiario.
+      ProtocolType: HTTP
+      Target: !GetAtt QueryFunction.Arn
+
+  QueryApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref QueryFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
 
   # ================================================================ Alarmas
   IngestErrorsAlarm:
@@ -453,6 +483,9 @@ Resources:
       AlarmActions: [!Ref AlertsTopic]
 
 Outputs:
+  ApiUrl:
+    Description: URL base de la API (agregar /v1/risk/current o /v1/health).
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
   IngestFunctionName:
     Value: !Ref IngestFunction
   ValidateFunctionName:
