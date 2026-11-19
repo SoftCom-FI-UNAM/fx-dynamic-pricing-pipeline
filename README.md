@@ -11,29 +11,7 @@ Pipeline de ingeniería de datos para ImportaTech Mexico que automatiza la captu
 
 ## Arquitectura
 
-```mermaid
-flowchart LR
-    EB[Amazon EventBridge] --> LI[AWS Lambda: ingesta]
-    B[API SIE Banxico] --> LI
-    LI -->|payload original versionado| BRONZE[(Amazon S3: bronze)]
-    LI --> V[AWS Lambda: validación y cálculo]
-    CAT[Export periódico de catálogo SQL Server] --> S3CAT[(Amazon S3: catálogo)]
-    S3CAT --> V
-    BRONZE --> V
-    V -->|histórico limpio Parquet| SILVER[(Amazon S3: silver)]
-    V -->|estado vigente JSON| GOLD[(Amazon S3: gold)]
-    V -->|anomalía| SNS[Amazon SNS]
-    API[Amazon API Gateway] --> Q[AWS Lambda: consulta]
-    Q --> GOLD
-    Q --> ECOM[E-commerce]
-    CW[Amazon CloudWatch: logs, métricas y alarmas] -.-> LI
-    CW -.-> V
-    CW -.-> Q
-    IAM[AWS IAM: mínimo privilegio] -.-> LI
-    IAM -.-> V
-    IAM -.-> Q
-    CT[CloudTrail: auditoría de actividad AWS] -.-> BRONZE
-```
+![Arquitectura del pipeline](docs/consultoria/diagrama.jpeg)
 
 > El diagrama es conceptual. El despliegue debe validar cuotas, precios y elegibilidad de la cuenta AWS. No se asume que todos los servicios mantengan costo cero en cualquier cuenta o volumen.
 
